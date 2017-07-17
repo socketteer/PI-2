@@ -5,12 +5,12 @@ def cost():
     #calculate cost using state information
     return 0    
     
-def rollout(start_params, timesteps, prob, sensitivity, M, R):
-    cost = np.zeros(timesteps)
+def rollout(dmp, start_params, num_params, num_activation, timesteps, prob, sensitivity, M, R):
+    #cost = np.zeros(timesteps)
     prob_sum = 0
     #reset DMP here
-    #copy?
     #copy cassie
+    #set weights in params
     
     for i in range(timesteps):
         cassie_output[8:] = dmp.step(params) 
@@ -29,39 +29,45 @@ def rollout(start_params, timesteps, prob, sensitivity, M, R):
 def probability(sensitivity):
     return np.exp(-1/sensitivity * cost())
     
-def generate_noise(num_traj, num_params, variance):
-    return np.random.normal(0,np.sqrt(variance),(num_traj, num_params))
+def generate_noise(num_traj, num_params, num_activation, variance):
+    return np.random.normal(0,np.sqrt(variance),(num_traj, num_params, num_activation)
 
-def avg_over_trials(num_traj, num_params, prob, noise):
-    avg = np.zeros(num_params)
-    for k in range(num_traj):
-        avg += prob[k]*M[k]*noise[k:]
+def avg_over_trials(num_traj, num_params, num_activation, prob, noise, M):
+    avg = np.zeros(num_params, num_activation)
+    #for each timestep i
+    for p in range(num_params): #for each parameter
+        for k in range(num_traj): #loop through trajectories
+            #incrementing average by noise of parameter weighted by probability of that trajectory
+            avg[p,:] += prob[k] * M[k] * noise[k,p,:]
+        
     return avg    
 
-def avg_over_timesteps(num_traj, num_params, timesteps):
+def avg_over_timesteps(num_params, timesteps):
     pass
 
 
 timesteps = 30
 num_traj = 10
-num_params = 12
+num_params = 12 
+num_activation = 10
 sensitivity = 1
 prob = np.zeros((num_traj, timesteps))
-base_trajectory = np.zeros(num_params) 
+base_trajectory = np.zeros((num_params, num_activation)) 
 noise = generate_noise(num_traj, num_params, variance)
-timestep_param_update = np.zeros((timesteps, num_params))
-param_update = np.zeros(num_params)
+timestep_param_update = np.zeros((timesteps, num_params, num_activation))
+param_update = np.zeros((num_params, num_activation))
 control_ratio = 0.7
-R = np.identity(num_params) * control_ratio
+R = np.identity(num_params) * control_ratio #??? how, if at all, is this affected by number of activations?
 M = np.zeros((num_traj, timesteps))
 
+base_trajectory = dmp.getweights() 
 
 for k in range (num_traj):
-    rollout(start_params = base_trajectory + noise[k:], timesteps, prob[k:], sensitivity, M[k:], R)
+    rollout(start_params = base_trajectory + noise[k,:,:], timesteps, prob[k:], sensitivity, M[k:], R)
     
 for i in range (timesteps):
-    timestep_param_update[i:] = avg_over_trials(num_traj, num_params, prob, noise, M[:i])
+    timestep_param_update[i,:,:] = avg_over_trials(num_traj, num_params, prob[:,i], noise, M[:i])
     
-    
-    
+param_update = avg_over_timesteps(num_params, timesteps) 
+
     
