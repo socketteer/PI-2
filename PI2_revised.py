@@ -53,31 +53,42 @@ def avg_over_timesteps(dmp, num_params, num_activation, timesteps, timestep_para
                                                                
     return avg / denominator #returns 2D array
 
+def update_params(dmp, timesteps, num_traj, num_params, num_activation, sensitivity = 1, control_ratio = 0.7):
+    #creating buffers
+    prob = np.zeros((num_traj, timesteps))
+    #base_trajectory = np.zeros((num_params, num_activation)) 
+    noise = generate_noise(num_traj, num_params, num_activations, variance)
+    timestep_param_update = np.zeros((timesteps, num_params, num_activation))
+    param_update = np.zeros((num_params, num_activation))
+    R = np.identity(num_params) * control_ratio #??? how, if at all, is this affected by number of activations?
+    M = np.zeros((num_traj, timesteps))
+    
+    base_trajectory = dmp.getweights() 
+    
+    getting probability and M values for each trajectory
+    for k in range (num_traj):
+            rollout(start_params = base_trajectory + noise[k,:,:], timesteps, prob[k:], sensitivity, M[k:], R)
+
+    #averaging over trials, getting param update for each timestep    
+    for i in range (timesteps):
+        timestep_param_update[i,:,:] = avg_over_trials(num_traj, num_params, num_activation, \
+            prob[:,i], noise, M[:i])
+    
+    #averaging over timesteps, getting final param update    
+    param_update = avg_over_timesteps(dmp, num_params, num_activation, timesteps, timestep_param_update) 
+
+    return base_trajectory + param_update #sum of 2D arrays
+
+    
 
 timesteps = 30
 num_traj = 10
 num_params = 12 
 num_activation = 10
 sensitivity = 1
-prob = np.zeros((num_traj, timesteps))
-base_trajectory = np.zeros((num_params, num_activation)) 
-noise = generate_noise(num_traj, num_params, num_activations, variance)
-timestep_param_update = np.zeros((timesteps, num_params, num_activation))
-param_update = np.zeros((num_params, num_activation))
 control_ratio = 0.7
-R = np.identity(num_params) * control_ratio #??? how, if at all, is this affected by number of activations?
-M = np.zeros((num_traj, timesteps))
 
-base_trajectory = dmp.getweights() 
+update_params(dmp, timesteps, num_traj, num_params, num_activation)
 
-for k in range (num_traj):
-    rollout(start_params = base_trajectory + noise[k,:,:], timesteps, prob[k:], sensitivity, M[k:], R)
-    
-for i in range (timesteps):
-    timestep_param_update[i,:,:] = avg_over_trials(num_traj, num_params, num_activation, \
-        prob[:,i], noise, M[:i])
-    
-param_update = avg_over_timesteps(dmp, num_params, num_activation, timesteps, timestep_param_update) 
-
-new_params = base_trajectory + param_update #adding 2D arrays
+#
 
