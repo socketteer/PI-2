@@ -8,6 +8,10 @@ def cost():
 def rollout(start_params, timesteps, prob, sensitivity, M, R):
     cost = np.zeros(timesteps)
     prob_sum = 0
+    #reset DMP here
+    #copy?
+    #copy cassie
+    
     for i in range(timesteps):
         cassie_output[8:] = dmp.step(params) 
         libcassie.cassie_step2(c, cassie_output.ctypes.data_as(c_double_p))
