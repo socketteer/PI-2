@@ -10,11 +10,11 @@ def cost(trajectory, timesteps):
     #run trial, add to cost
     return cost #returns array of costs over timesteps
 
-def probability(trajectories, num_params, sensitivity, timesteps):
+def probability(trajectories, num_traj, sensitivity, timesteps):
     prob = np.zeros(num_params)
     prob_sum = 0
     #trajectories with lower costs have higher probabilities
-    for k in range (num_params):
+    for k in range (num_traj):
         prob[k] = (np.exp(-1/sensitivity * cost(trajectories[k], timesteps)))
         prob_sum += prob[k]
     return prob / prob_sum
