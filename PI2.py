@@ -37,14 +37,26 @@ libcassie.cassie_vel.restype = None
     
 def cost():
     #calculate cost using state information
+    cost = 0
+    #quadratic distance between center of mass and center of pressure
+    stability_cost_x = (left.foot_pos[x] + right.foot_pos[x])**2
+    
+    #TODO height deviation with forgiveness zone
+    
+    #TODO linear velocity deviation penalty with forgiveness zone
+    
     return 0 #returns scalar cost-to-go for timestep   
+
+def terminal_cost(init_state, final_state):
+    return (init_state - final_state)**2 #should this be squared or abs?
+    
     
 def rollout(dmp, start_params, num_params, num_activation, timesteps, prob, sensitivity, M, R):
     #cost = np.zeros(timesteps)
     prob_sum = 0
-    #reset DMP here
-    #copy cassie
-    #set weights in params
+    #TODO reset DMP here
+    #TODO copy cassie
+    #TODO set weights in params
     
     for i in range(timesteps):
         cassie_output[8:] = dmp.step(params) 
@@ -53,6 +65,8 @@ def rollout(dmp, start_params, num_params, num_activation, timesteps, prob, sens
         
         prob[i] = probability(sensitivity)
         prob_sum += prob[i]
+        
+        #TODO integrate terminal cost
         
         #computing M, calling goals function from DMP 
         M[i] = np.transpose(R)*dmp.goals()*np.transpose(dmp.goals()) \
