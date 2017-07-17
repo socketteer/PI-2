@@ -1,4 +1,38 @@
+import ctypes
 import numpy as np
+
+from numpy import genfromtxt
+
+# Load cassie library
+libcassie = ctypes.CDLL('libcassie.so')
+c_double_p = ctypes.POINTER(ctypes.c_double)
+libcassie.cassie_init.argtypes = []
+libcassie.cassie_init.restype = ctypes.c_void_p
+libcassie.cassie_duplicate.argtypes = [ctypes.c_void_p]
+libcassie.cassie_duplicate.restype = ctypes.c_void_p
+libcassie.cassie_copy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+libcassie.cassie_copy.restype = None
+libcassie.cassie_free.argtypes = [ctypes.c_void_p]
+libcassie.cassie_free.restype = None
+
+libcassie.cassie_step1.argtypes = [ctypes.c_void_p, c_double_p]
+libcassie.cassie_step1.restype = None
+libcassie.cassie_step2.argtypes = [ctypes.c_void_p, c_double_p]
+libcassie.cassie_step2.restype = None
+
+libcassie.cassie_vis_init.argtypes = []
+libcassie.cassie_vis_init.restype = ctypes.c_void_p
+libcassie.cassie_vis_free.argtypes = [ctypes.c_void_p]
+libcassie.cassie_vis_free.restype = None
+libcassie.cassie_vis_draw.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+libcassie.cassie_vis_draw.restype = ctypes.c_bool
+
+libcassie.cassie_time.argtypes = [ctypes.c_void_p]
+libcassie.cassie_time.restype = ctypes.c_double
+libcassie.cassie_pos.argtypes = [ctypes.c_void_p, c_double_p]
+libcassie.cassie_pos.restype = None
+libcassie.cassie_vel.argtypes = [ctypes.c_void_p, c_double_p]
+libcassie.cassie_vel.restype = None
  
     
 def cost():
