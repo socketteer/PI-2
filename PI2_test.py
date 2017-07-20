@@ -89,10 +89,17 @@ num_bestpaths = 3
 timesteps = 30
 num_traj = 10
 
+#Creating cost buffer
+#TODO this is stupid, find better way
+cost = np.zeros(timesteps)
+
 pi = PI2(c, dmp, params, timesteps, num_traj, num_bestpaths)
 
 for _ in range(10):
     #update weights of DMP
-    params['weights'] = pi.update_params(params['weights'])
-    
-    
+    params['weights'] = pi.update_params(params['weights'])    
+    #getting cumulative cost of rollout with new weights to evaluate convergence behavior
+    print(pi.get_cumulative_cost(params['weights'], test = 1))
+
+#Clean up    
+libcassie.cassie_free(c)    

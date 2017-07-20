@@ -35,6 +35,11 @@ libcassie.cassie_vel.restype = None
 #TODO Pi-2 CMA
 
 class PI2():
+    '''
+    Policy Improvement with Path Integrals (Pi^2) with elitism
+    Model-free RL algorithm to learn motion primitive weights for bipedal locomotion
+    '''
+    
     def __init__(self, cassie, dmp, params, \
                  timesteps = 1000, \
                  num_traj = 10, \
@@ -52,7 +57,7 @@ class PI2():
         variance: float array(dims) or float. variance of noise. If float, 
             all dimensions receive noise with the same variance
         sensitivity: float. determines probability's sensitivity to cost
-        control_ratio: float array(dims) or float. If float, all dimensions have 
+        control_ratio: float array(basis_dims) or float. If float, all dimensions have 
             the same control cost
 
         '''
@@ -70,7 +75,7 @@ class PI2():
         #If variance is an array, self.variance remains that array
         #If control_ratio is a constant, R is a diagonal matrix filled with that constant
         #If control_ratio is an array, R is a diagonal matrix with control_ratio as the diagonal
-        ones_array = np.ones(self.dims)
+        ones_array = np.ones(self.basis_dims)
         self.variance = variance * ones_array
         self.R = np.diag(control_ratio * ones_array)
         
@@ -87,7 +92,8 @@ class PI2():
         base_trajectory: float array((dims, basis dims))
             
         PI^2 Algorithm: 
-            Creates num-traj rollouts from same start state with stochastic DMP parameters.
+            Creates num_traj rollouts from same start state with stochastic DMP parameters.
+            Best trajectories from last iteration are included. 
             Datermines cost of each trial, probability of each trial, averages over trials,
             averages over timesteps, and then updates parameter with weighted average. 
 
@@ -99,21 +105,28 @@ class PI2():
         cost = np.zeros((self.num_traj, self.timesteps))
         timestep_param_update = np.zeros((self.timesteps, self.dims, self.basis_dims))
         param_update = np.zeros((self.dims, self.basis_dims))
-        M = np.zeros((self.num_traj, self.timesteps))
+        M = np.zeros((self.num_traj, self.timesteps, self.dims, self.basis_dims, self.basis_dims)) 
         
         #generating noise array
         noise = self.generate_noise()
         
-        #using num_best paths from previous iteration
-        noise[:self.num_best, :, :] = self.bestpaths 
-                
-        #getting probability and M values for K noisy trajectories
+        #if bestpaths not zeros, using num_best paths from previous iteration
+        if np.any(self.bestpaths):
+            noise[:self.num_best, :, :] = self.bestpaths 
+
+        #creating rollouts and getting probabilities for K noisy trajectories
         for k in range (self.num_traj):
-            self.rollout(base_trajectory + noise[k,:,:], cost[k,:], prob[k,:], M[k,:])
+            #compute M and cost-to-go for each trajectory
+            M[k,:,:,:,:], cost[k,:] = self.rollout(base_trajectory)
+            prob_sum = 0
+            for i in range(self.timesteps):        
+                prob[k,i] = self.probability(cost[k,i])
+                prob_sum += prob[k,i]                
+            prob[k,:] /= prob_sum  
         
         #averaging over trials, getting param update for each timestep    
         for i in range (self.timesteps):
-            timestep_param_update[i,:,:] = self.avg_over_trajectories(prob[:,i], noise, M[:,i])
+            timestep_param_update[i,:,:] = self.avg_over_trajectories(prob[:,i], noise, M[:,i,:,:,:])
         
         #averaging over timesteps, getting final param update    
         param_update = self.avg_over_timesteps(timestep_param_update) 
@@ -130,20 +143,29 @@ class PI2():
         for i in range(self.dims):
             noise[:,i,:] = np.random.normal(0,np.sqrt(self.variance[i]),(self.num_traj, self.basis_dims)) 
         return noise 
-        
-
-    def rollout(self, params, cost, prob, M):
+    
+    def compute_M(self, x):
         '''
-        params: array(dims) of floats. initial weights. 
-        cost: array(timesteps) of floats
-        prob: array(timesteps) of floats
-        M: array(timesteps) of floats
+        x: float. temporal variable of dmp
+        
+        M is needed to project exploration noise onto parameter space
+        
+        Returns float array((basis_dims, basis_dims))
+        '''
+        #dmp.get_psi returns a float array(basis dims) of activations at x
+        return np.transpose(self.R)*self.dmp.get_psi(x)*np.transpose(self.dmp.get_psi(x)) \
+                / (np.transpose(self.dmp.get_psi(x))*np.transpose(self.R)*self.dmp.get_psi(x))
+        
+    def rollout(self, params, test_rollout = 0):
+        '''
+        params: float array(dims). initial weights. 
         
         Resets mujoco and dmp state. Creates a rollout of specified trajectory and determines 
-        cost-to-go at each timestep.
-        The purpose of this method is to compute cost, prob and M for each timestep. Cost, prob and M 
-        are one-dimensional slices of the 2 dimensional arrays defined in update_params. 
-        This method is called for each trajectory.'''
+        cost-to-go at each timestep. Cost here is a one-dimensional slice of the 2 dimensional 
+        array defined in update_params. 
+        
+        This method is called for each trajectory.
+        Returns cost (float array(timesteps)) and M (float array((timesteps, dims, basis_dims, basis_dims)'''
         
         #create buffers
         init_pos = np.zeros(35)
@@ -154,6 +176,8 @@ class PI2():
         final_acc = np.zeros(32)
         cassie_input = np.zeros(98, dtype=np.double)
         cassie_output = np.zeros(20, dtype=np.double)
+        cost = np.zeros(self.timesteps)
+        M = np.zeros((self.timesteps, self.dims, self.basis_dims, self.basis_dims))
         
         #resetting cassie and copying initial state
         self.reset_cassie()
@@ -163,31 +187,38 @@ class PI2():
         self.dmp.reset()
         self.params['weights'] = params
  
+        x = 0
         for i in range(self.timesteps):
-            cassie_output[8:] = self.dmp.step(self.params) 
+            cassie_output[8:], _, _, x = self.dmp.step(self.params) 
             libcassie.cassie_step2(self.cassie, cassie_output.ctypes.data_as(c_double_p))
-            libcassie.cassie_step1(self.cassie, cassie_input.ctypes.data_as(c_double_p))                    
-            #computing instantaneous cost
-            cost[i] = self.cost(cassie_input)        
-            #self.params['goals'] is a 1D array
-            M[i] = np.transpose(self.R)*self.params['goals']*np.transpose(self.params['goals']) \
-                / (np.transpose(self.self.params['goals'])*np.transpose(self.R)*self.params['goals'])
+            libcassie.cassie_step1(self.cassie, cassie_input.ctypes.data_as(c_double_p))
+            #computing M for all dimensions corresponding x at timestep i 
+            for d in range(self.dims):
+                M[i,d,:,:] = self.compute_M(x[d])                  
+            #computing cost to go
+            cost[:i] += self.cost(cassie_input)
+            #TODO append M terms                   
 
         #copying final state
         libcassie.copy_data(self.cassie, final_pos, final_vel, final_acc)
 
         #appending terminal cost to each instantaneous cost
         cost += self.terminal_cost(init_pos, init_vel, init_acc, final_pos, final_vel, final_acc)
-     
-        #computing probability for each timestep
-        prob_sum = 0
-        for i in range(self.timesteps):        
-            prob[i] = self.probability(cost[i])
-            prob_sum += prob[i]
+    
+        if(test_rollout == 1):
+            return cost
+        else:
+            return cost, M
+    
+    def get_cumulative_cost(self, params, cost):
+        '''
+        params: array(dims) of floats. initial weights. 
+        cost: array(timesteps) of floats
         
+        returns scalar cumulative cost for one rollout'''
         
-        #prob is 1D array 
-        prob /= prob_sum   
+        self.rollout(params, cost)
+        return np.sum(cost, axis = 0)
     
     def n_best_paths(self, cost, rank, noise):
         '''
@@ -255,6 +286,9 @@ class PI2():
 
     def avg_over_trajectories(self, prob, noise, M):
         '''
+        prob: float(num_traj). Probabilities for each trajectory for a single timestep
+        noise: float (num_traj, dims, basis_dims)
+        
         Computes parameter update for each timestep by averaging noise across trajectories weighted
         by probability. This function is called for each timestep.
         
@@ -262,13 +296,13 @@ class PI2():
         '''
         avg = np.zeros((self.dims, self.basis_dims))
          
-        for p in range(self.dims): 
+        for d in range(self.dims): 
             for k in range(self.num_traj): 
                 #incrementing average by noise of parameter weighted by probability of that trajectory
-                avg[p,:] += prob[k] * M[k] * noise[k,p,:]        
+                avg[d,:] += prob[k] * M[k,d,:,:] * noise[k,d,:]        
         return avg    
 
-    def avg_over_timesteps(self, timestep_param_update):
+    def avg_over_timesteps(self, timestep_param_update):                         
         '''timestep_param_update: float array((timesteps, dims, basis_dims))
         
         This function takes in the parameter update for each timestep and averages across timesteps,
