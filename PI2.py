@@ -49,7 +49,7 @@ class PI2():
                  control_ratio = 0.7):
         '''
         cassie: cassie_t object. Initial Cassie state.
-        dmp: DMP object
+        pydmp: DMP object
         params: dictionary of DMP parameters
         timesteps: int, number of timesteps for rollouts.
         num_traj: int, number of noisy trajectories to create rollouts for. 
@@ -118,6 +118,13 @@ class PI2():
         for k in range (self.num_traj):
             #compute M and cost-to-go for each trajectory
             M[k,:,:,:,:], cost[k,:] = self.rollout(base_trajectory)
+            #appending control cost
+            for i in range(1, self.timesteps):
+                for d in range (self.dims):
+                    #TODO should control cost of each dimension be summed or averaged?
+                    cost[k,:i] += np.transpose(base_trajectory + \
+                        M[k,i,d,:,:]*noise[k,d,:]) * self.R * \
+                        (base_trajectory + M[k,i,d,:,:]*noise[k,d,:])
             prob_sum = 0
             for i in range(self.timesteps):        
                 prob[k,i] = self.probability(cost[k,i])
@@ -146,21 +153,23 @@ class PI2():
     
     def compute_M(self, x):
         '''
-        x: float. temporal variable of dmp
+        x: float. temporal variable of pydmp
         
         M is needed to project exploration noise onto parameter space
         
         Returns float array((basis_dims, basis_dims))
         '''
-        #dmp.get_psi returns a float array(basis dims) of activations at x
-        return np.transpose(self.R)*self.dmp.get_psi(x)*np.transpose(self.dmp.get_psi(x)) \
-                / (np.transpose(self.dmp.get_psi(x))*np.transpose(self.R)*self.dmp.get_psi(x))
+        #R is a diagonal matrix
+        R_inverse = .1/self.R
+        #dmp.get_psi returns a float array(basis dims) of activations at x       
+        return R_inverse*self.dmp.get_psi(x)*np.transpose(self.dmp.get_psi(x)) \
+                / (np.transpose(self.dmp.get_psi(x))*R_inverse*self.dmp.get_psi(x))
         
     def rollout(self, params, test_rollout = 0):
         '''
         params: float array(dims). initial weights. 
         
-        Resets mujoco and dmp state. Creates a rollout of specified trajectory and determines 
+        Resets mujoco and pydmp state. Creates a rollout of specified trajectory and determines
         cost-to-go at each timestep. Cost here is a one-dimensional slice of the 2 dimensional 
         array defined in update_params. 
         
@@ -183,7 +192,7 @@ class PI2():
         self.reset_cassie()
         libcassie.copy_data(self.cassie, init_pos, init_vel, init_acc)
         
-        #resetting dmp and setting weights in params dict
+        #resetting pydmp and setting weights in params dict
         self.dmp.reset()
         self.params['weights'] = params
  
@@ -196,8 +205,8 @@ class PI2():
             for d in range(self.dims):
                 M[i,d,:,:] = self.compute_M(x[d])                  
             #computing cost to go
-            cost[:i] += self.cost(cassie_input)
-            #TODO append M terms                   
+            #appends instantaneous cost to current and previous timesteps
+            cost[:i+1] += self.cost(cassie_input)                  
 
         #copying final state
         libcassie.copy_data(self.cassie, final_pos, final_vel, final_acc)
@@ -260,7 +269,7 @@ class PI2():
         #height deviation penalty with forgiveness region
         height_cost = 0
         
-        forgive_range = 0.3 #no clue what range this should be in
+        forgive_range = 0.3 #TODO no clue what range this should be in
         
         if(abs(pos[2] - 1) > forgive_range):
             height_cost = abs(pos[2] - 1)
@@ -315,7 +324,7 @@ class PI2():
         denominator = 0 #to scale avg
         for i in range(self.timesteps - 1): #for each timestep
             for j in range(self.basis_dims):
-                #param update for basis j across all dmp dimensions incremented by timestep param update 
+                #param update for basis j across all pydmp dimensions incremented by timestep param update
                 #weighted by corresponding activation and steps left in trajectory  
                 #get_activation is a placeholder
                 avg[:,j] += (self.timesteps - i) * self.dmp.get_activations(activation = j, time = i) * \
