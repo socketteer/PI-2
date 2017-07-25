@@ -1,60 +1,28 @@
-import ctypes
 import numpy as np
 
 from numpy import genfromtxt
-from dmp import DMP, RhythmicDMP
-import PI2
-
-# Load cassie library
-libcassie = ctypes.CDLL('libcassie.so')
-c_double_p = ctypes.POINTER(ctypes.c_double)
-libcassie.cassie_init.argtypes = []
-libcassie.cassie_init.restype = ctypes.c_void_p
-libcassie.cassie_duplicate.argtypes = [ctypes.c_void_p]
-libcassie.cassie_duplicate.restype = ctypes.c_void_p
-libcassie.cassie_copy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-libcassie.cassie_copy.restype = None
-libcassie.cassie_free.argtypes = [ctypes.c_void_p]
-libcassie.cassie_free.restype = None
-
-libcassie.cassie_step1.argtypes = [ctypes.c_void_p, c_double_p]
-libcassie.cassie_step1.restype = None
-libcassie.cassie_step2.argtypes = [ctypes.c_void_p, c_double_p]
-libcassie.cassie_step2.restype = None
-
-libcassie.cassie_vis_init.argtypes = []
-libcassie.cassie_vis_init.restype = ctypes.c_void_p
-libcassie.cassie_vis_free.argtypes = [ctypes.c_void_p]
-libcassie.cassie_vis_free.restype = None
-libcassie.cassie_vis_draw.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-libcassie.cassie_vis_draw.restype = ctypes.c_bool
-
-libcassie.cassie_time.argtypes = [ctypes.c_void_p]
-libcassie.cassie_time.restype = ctypes.c_double
-libcassie.cassie_pos.argtypes = [ctypes.c_void_p, c_double_p]
-libcassie.cassie_pos.restype = None
-libcassie.cassie_vel.argtypes = [ctypes.c_void_p, c_double_p]
-libcassie.cassie_vel.restype = None
+from pydmp import dmp
+import scipy.ndimage
+from pi2 import PI2
+from rl_cassie import RL_Cassie
 
 # Create input/output buffers
 q_pos = genfromtxt('qpos.csv', delimiter=',')
 q_vel = genfromtxt('qvel.csv', delimiter=',')
 q_acc = genfromtxt('qacc.csv', delimiter=',')
 
-
-# Initialize cassie simulation
-c = libcassie.init_from_data(q_pos.ctypes.data_as(c_double_p), \
-                             q_vel.ctypes.data_as(c_double_p), \
-                             q_acc.ctypes.data_as(c_double_p))
+cassie = RL_Cassie(q_pos, q_vel, q_acc)
 
 #taskspace of expert trajectory
-taskspace_output = genfromtxt('cycle.csv', delimiter=',')
+taskspace_output = genfromtxt('cycle.csv', delimiter=',').transpose()
+y_des = scipy.ndimage.filters.gaussian_filter1d(taskspace_output, 15, axis=1, mode='wrap')
 
-params = {'dt': 0.0005, \
-          'dims': 12, \
-          'canonicals': [0,0,0,0,0,0,1,1,1,1,1,1,1], \
-          'y0':taskspace_output[0,:]}
-
+params = {'dt': 0.0005,
+          'dims': 12,
+          'tau': 1.31492439185,
+          'canonicals': [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+          'y0': y_des[:, 0],
+          'num_basis' : 100}
 
 def dy_mult():
     return 1
@@ -74,6 +42,33 @@ def dx_mult():
 def dx_add():
     return 0
 
+def cost(cassie):
+    '''Computes cost-to-go using state information. Returns float.'''
+    pos = cassie.pos()
+    vel = cassie.vel()
+    
+    #quadratic distance between center of mass and center of pressure
+    #[24] = right foot x pos, [25] = right foot y pos, [55]= left x, [56] = left y
+    stability_cost_x = (cassie.state[24] + cassie.state[55])**2
+    stability_cost_y = (cassie.state[25] + cassie.state[56])**2
+    #height deviation penalty with forgiveness region
+    height_cost = 0
+    
+    forgive_range = 0.3 #TODO no clue what range this should be in
+    
+    if(abs(pos[2] - 1) > forgive_range):
+        height_cost = abs(pos[2] - 1)
+    
+    #TODO linear velocity deviation penalty with forgiveness region
+    
+    cost = stability_cost_x + stability_cost_y + height_cost
+    
+    return cost
+
+def terminal_cost(cassie):
+    pos_error, vel_error, acc_error = cassie.diff()
+    return np.sum(np.square(pos_error)) + np.sum(np.square(vel_error)) + np.sum(np.square(acc_error))
+
 params.update({'dy_mult':dy_mult, \
                'dy_add':dy_add, \
                'ddy_mult':ddy_mult, \
@@ -81,10 +76,11 @@ params.update({'dy_mult':dy_mult, \
                'dx_mult':dx_mult, \
                'dx_add':dx_add})
 
-dmp = DMP(params)
+#imitation of path run
+dmp = dmp.RhythmicDMP(**params)
+params.update(dmp.imitate_path(y_des=y_des, **params))
 
-#TODO add saved weights, heights, centers from file to params dictionary
-
+#PI2 parameters
 num_bestpaths = 3
 timesteps = 30
 num_traj = 10
@@ -97,9 +93,9 @@ pi = PI2(c, dmp, params, timesteps, num_traj, num_bestpaths)
 
 for _ in range(10):
     #update weights of DMP
-    params['weights'] = pi.update_params(params['weights'])    
+    params['weights'] = pi.update_params(params['weights'])
     #getting cumulative cost of rollout with new weights to evaluate convergence behavior
     print(pi.get_cumulative_cost(params['weights'], test = 1))
 
-#Clean up    
-libcassie.cassie_free(c)    
+#Clean up
+cassie.clean_up()
